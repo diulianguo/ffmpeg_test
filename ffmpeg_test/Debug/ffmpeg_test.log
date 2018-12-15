@@ -1,0 +1,17 @@
+﻿  stdafx.cpp
+  taskset.cpp
+g:\code\ffmpeg_test\ffmpeg_test\bits.h(18): warning C4018: “<”: 有符号/无符号不匹配
+  ports.cpp
+g:\code\ffmpeg_test\ffmpeg_test\ports.cpp(7): warning C4603: “_GNU_SOURCE”: 未定义宏或在预编译头使用后定义发生改变
+  g:\code\ffmpeg_test\ffmpeg_test\ports.cpp(7): note: 将宏添加到预编译头中，而不是在此处定义
+  g:\code\ffmpeg_test\ffmpeg_test\ports.cpp(8): note: 使用预编译头
+  lock.cpp
+  hb_thread.cpp
+  hb_mem.cpp
+  ffmpeg_test.cpp
+g:\code\ffmpeg_test\include\libavutil\rational.h : warning C4819: 该文件包含不能在当前代码页(936)中表示的字符。请将该文件保存为 Unicode 格式以防止数据丢失
+g:\code\ffmpeg_test\ffmpeg_test\ffmpeg_test.cpp(53): warning C4101: “y”: 未引用的局部变量
+g:\code\ffmpeg_test\ffmpeg_test\ffmpeg_test.cpp(53): warning C4101: “x”: 未引用的局部变量
+  正在生成代码...
+  ffmpeg_test.vcxproj -> G:\code\ffmpeg_test\Debug\ffmpeg_test.exe
+  ffmpeg_test.vcxproj -> G:\code\ffmpeg_test\Debug\ffmpeg_test.pdb (Full PDB)
