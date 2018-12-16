@@ -15,6 +15,27 @@ extern "C"
 #include <libavutil/imgutils.h>
 }
 
+#include "taskset.h"
+#include "hbtypes.h"
+
+#define NUM_THREADS 1
+
+typedef struct
+{
+    struct hb_work_private_s *pv;
+    int thread_idx;
+    AVPacket *out;
+}encwrapper_thread_arg_t;
+
+struct hb_work_private_s {
+    int                   thread_count;
+    AVFrame               *frame;
+    AVPacket              *packet[NUM_THREADS];
+    taskset_t             taskset;
+    encwrapper_thread_arg_t *thread_data[NUM_THREADS];
+    AVCodecContext        *c[NUM_THREADS];
+};
+
 static void encode(AVCodecContext *enc_ctx, AVFrame *frame, AVPacket *pkt,
     FILE *outfile)
 {
@@ -45,7 +66,7 @@ static void encode(AVCodecContext *enc_ctx, AVFrame *frame, AVPacket *pkt,
     }
 }
 
-static void encoder(AVCodecContext *enc_ctx, AVFrame *frame, AVPacket *pkt, int i)
+static void encoder_work(AVCodecContext *enc_ctx, AVFrame *frame, AVPacket *pkt, int i)
 {
     FILE *fp_out;
     uint8_t endcode[] = { 0, 0, 1, 0xb7 };
@@ -67,16 +88,75 @@ static void encoder(AVCodecContext *enc_ctx, AVFrame *frame, AVPacket *pkt, int 
     fclose(fp_out);
 }
 
+void encWork_thread(void *thread_args_v)
+{
+    encwrapper_thread_arg_t *thread_data = (encwrapper_thread_arg_t *)thread_args_v;
+    hb_work_private_s *pv = thread_data->pv;
+    int thread_idx = thread_data->thread_idx;
+
+    while (1)
+    {
+        // Wait until there is work to do.
+        taskset_thread_wait4start(&pv->taskset, thread_idx);
+
+        if (taskset_thread_stop(&pv->taskset, thread_idx))
+        {
+            break;
+        }
+
+        encoder_work(pv->c[thread_idx], pv->frame, pv->packet[thread_idx], thread_idx);
+
+        // Finished this segment, notify.
+        taskset_thread_complete(&pv->taskset, thread_idx);
+    }
+    taskset_thread_complete(&pv->taskset, thread_idx);
+}
+
+int tasksetInit(hb_work_private_t *pv)
+{
+    if (taskset_init(&pv->taskset, pv->thread_count, sizeof(encwrapper_thread_arg_t)) == 0)
+    {
+        printf("Could not initialize taskset!\n");
+        goto fail;
+    }
+
+    for (int i = 0; i < pv->thread_count; i++)
+    {
+        pv->thread_data[i] = (encwrapper_thread_arg_t *)taskset_thread_args(&pv->taskset, i);
+        if (pv->thread_data[i] == NULL)
+        {
+            printf("Could not create thread args!\n");
+            goto fail;
+        }
+        pv->thread_data[i]->pv = pv;
+        pv->thread_data[i]->thread_idx = i;
+        if (taskset_thread_spawn(&pv->taskset, i, "encwrapper", encWork_thread, 0) == 0)
+        {
+            printf("Could not spawn thread!\n");
+            goto fail;
+        }
+    }
+
+    return 0;
+
+    fail:
+        taskset_fini(&pv->taskset);
+        free(pv);
+        return -1;
+
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
     //const char *filename_out, *codec_name;
-    const AVCodec *codec;
-    AVCodecContext *c[4] = { NULL, NULL, NULL, NULL };
-    int i, ret, x, y, y_size;
+    const AVCodec *codec[4];
+    //AVCodecContext *c[4] = { NULL, NULL, NULL, NULL };
+    int i, j, ret, y_size;
     FILE *fp_in;
-    FILE *fp_out;
+    //FILE *fp_out;
     AVFrame *frame;
-    AVPacket *pkt;
+    AVPacket *pkt[NUM_THREADS];
     AVPixelFormat pixel_fmt = AV_PIX_FMT_YUV420P;
     int width = 1920;
     int height = 1080;
@@ -85,6 +165,9 @@ int main(int argc, char **argv)
     char filename_out[] = "output.265";
     char codec_name[] = "libx265";
 
+    hb_work_private_t *pv = (hb_work_private_t *)calloc(1, sizeof(hb_work_private_t));
+    pv->thread_count = NUM_THREADS;
+
     /*if (argc <= 2) {
         fprintf(stderr, "Usage: %s <output file> <codec name>\n", argv[0]);
         exit(0);
@@ -92,33 +175,36 @@ int main(int argc, char **argv)
     //filename_out = argv[1];
     //codec_name = argv[2];
 
-    /* find the mpeg1video encoder */
-    codec = avcodec_find_encoder_by_name(codec_name);
-    if (!codec) {
-        fprintf(stderr, "Codec '%s' not found\n", codec_name);
-        exit(1);
+    for (i = 0; i < NUM_THREADS; i++)
+    {
+        pkt[i] = av_packet_alloc();
+        if (!pkt[i])
+            exit(1);
     }
 
-    pkt = av_packet_alloc();
-    if (!pkt)
-        exit(1);
+    for (i = 0; i < NUM_THREADS; i++) {
+        /* find the mpeg1video encoder */
+        codec[i] = avcodec_find_encoder_by_name(codec_name);
+        if (!codec) {
+            fprintf(stderr, "Codec '%s' not found\n", codec_name);
+            exit(1);
+        }
 
-    for (int i = 0; i < 1; i++) {
-        c[i] = avcodec_alloc_context3(codec);
-        if (!c) {
+        pv->c[i] = avcodec_alloc_context3(codec[i]);
+        if (!pv->c[i]) {
             fprintf(stderr, "Could not allocate video codec context\n");
             exit(1);
         }
         /* put sample parameters */
-        c[i]->bit_rate = 400000;
+        pv->c[i]->bit_rate = 400000;
         /* resolution must be a multiple of two */
-        c[i]->width = width;
-        c[i]->height = height;
+        pv->c[i]->width = width;
+        pv->c[i]->height = height;
         /* frames per second */
         AVRational tmp1{ 1,25 };
         AVRational tmp2{ 25,1 };
-        c[i]->time_base = tmp1;
-        c[i]->framerate = tmp2;
+        pv->c[i]->time_base = tmp1;
+        pv->c[i]->framerate = tmp2;
         //c->time_base = (AVRational) { 1, 25 };
         //c->framerate = (AVRational) { 25, 1 };
 
@@ -128,20 +214,22 @@ int main(int argc, char **argv)
         * then gop_size is ignored and the output of encoder
         * will always be I frame irrespective to gop_size
         */
-        c[i]->gop_size = 10;
-        c[i]->max_b_frames = 1;
-        c[i]->pix_fmt = pixel_fmt;
+        pv->c[i]->gop_size = 10;
+        pv->c[i]->max_b_frames = 1;
+        pv->c[i]->pix_fmt = pixel_fmt;
 
-        if (codec->id == AV_CODEC_ID_H264)
-            av_opt_set(c[i]->priv_data, "preset", "slow", 0);
+        if (codec[i]->id == AV_CODEC_ID_H264)
+            av_opt_set(pv->c[i]->priv_data, "preset", "slow", 0);
 
         /* open it */
-        ret = avcodec_open2(c[i], codec, NULL);
+        ret = avcodec_open2(pv->c[i], codec[i], NULL);
         if (ret < 0) {
             //fprintf(stderr, "Could not open codec: %s\n", av_err2str(ret));
             exit(1);
         }
     }
+
+    tasksetInit(pv);
 
     //Input raw data
     fp_in = fopen(filename_in, "rb");
@@ -175,21 +263,6 @@ int main(int argc, char **argv)
         if (ret < 0)
             exit(1);
 
-        /* prepare a dummy image */
-        /* Y */
-        /*for (y = 0; y < c->height; y++) {
-        for (x = 0; x < c->width; x++) {
-        frame->data[0][y * frame->linesize[0] + x] = x + y + i * 3;
-        }
-        }*/
-
-        /* Cb and Cr */
-        /*for (y = 0; y < c->height / 2; y++) {
-        for (x = 0; x < c->width / 2; x++) {
-        frame->data[1][y * frame->linesize[1] + x] = 128 + y + i * 2;
-        frame->data[2][y * frame->linesize[2] + x] = 64 + x + i * 5;
-        }
-        }*/
         //Read raw YUV data
         if (fread(frame->data[0], 1, y_size, fp_in) <= 0 ||		// Y
             fread(frame->data[1], 1, y_size / 4, fp_in) <= 0 ||	// U
@@ -201,22 +274,36 @@ int main(int argc, char **argv)
         }
         frame->pts = i;
 
+        pv->frame = frame;
+        for (j = 0; j < NUM_THREADS; j++)
+        {
+            pv->packet[j] = pkt[j];
+        }
         /* encode the image */
-        encoder(c[0], frame, pkt, 0);
+        taskset_cycle(&pv->taskset);
     }
 
     /* flush the encoder */
-    encoder(c[0], NULL, pkt, 0);
-
+    pv->frame = NULL;
+    for (j = 0; j < NUM_THREADS; j++)
+    {
+        pv->packet[j] = pkt[j];
+    }
+    taskset_cycle(&pv->taskset);
 
     fclose(fp_in);
 
-    for (int i = 0; i < 1; i++)
+    for (i = 0; i < NUM_THREADS; i++)
     {
-        avcodec_free_context(&c[i]);
+        avcodec_free_context(&pv->c[i]);
     }
     av_frame_free(&frame);
-    av_packet_free(&pkt);
+    for (i = 0; i < NUM_THREADS; i++)
+    {
+        av_packet_free(&pkt[i]);
+    }
+    taskset_fini(&pv->taskset);
+    free(pv);
 
     system("pause");
     return 0;

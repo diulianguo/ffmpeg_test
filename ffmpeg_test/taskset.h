@@ -36,7 +36,7 @@ int taskset_init(taskset_t *, int /*thread_count*/, size_t /*user_arg_size*/);
 void taskset_cycle(taskset_t *);
 void taskset_fini(taskset_t *);
 
-int  taskset_thread_spawn(taskset_t *, int /*thr_idx*/, const char * /*descr*/, thread_func_t *, int /*priority*/);
+int  taskset_thread_spawn(taskset_t *, int /*thr_idx*/, char * /*descr*/, thread_func_t *, int /*priority*/);
 void taskset_thread_wait4start(taskset_t *, int);
 void taskset_thread_complete(taskset_t *, int);
 
