@@ -45,17 +45,42 @@ static void encode(AVCodecContext *enc_ctx, AVFrame *frame, AVPacket *pkt,
     }
 }
 
+static void encoder(AVCodecContext *enc_ctx, AVFrame *frame, AVPacket *pkt, int i)
+{
+    FILE *fp_out;
+    uint8_t endcode[] = { 0, 0, 1, 0xb7 };
+    char filename_out[20];
+    sprintf(filename_out, "output_%d.265", i);
+    char codec_name[] = "libx265";
+    //Output bitstream
+    fp_out = fopen(filename_out, "wb");
+    if (!fp_out) {
+        fprintf(stderr, "Could not open %s\n", filename_out);
+        exit(1);
+    }
+
+    /* encode the image or flush the encoder */
+    encode(enc_ctx, frame, pkt, fp_out);
+
+    /* add sequence end code to have a real MPEG file */
+    fwrite(endcode, 1, sizeof(endcode), fp_out);
+    fclose(fp_out);
+}
+
 int main(int argc, char **argv)
 {
     //const char *filename_out, *codec_name;
     const AVCodec *codec;
-    AVCodecContext *c = NULL;
+    AVCodecContext *c[4] = { NULL, NULL, NULL, NULL };
     int i, ret, x, y, y_size;
     FILE *fp_in;
     FILE *fp_out;
     AVFrame *frame;
     AVPacket *pkt;
-    uint8_t endcode[] = { 0, 0, 1, 0xb7 };
+    AVPixelFormat pixel_fmt = AV_PIX_FMT_YUV420P;
+    int width = 1920;
+    int height = 1080;
+    
     char filename_in[] = "G:/test.yuv";
     char filename_out[] = "output.265";
     char codec_name[] = "libx265";
@@ -74,47 +99,48 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    c = avcodec_alloc_context3(codec);
-    if (!c) {
-        fprintf(stderr, "Could not allocate video codec context\n");
-        exit(1);
-    }
-
     pkt = av_packet_alloc();
     if (!pkt)
         exit(1);
 
-    /* put sample parameters */
-    c->bit_rate = 400000;
-    /* resolution must be a multiple of two */
-    c->width = 1920;
-    c->height = 1080;
-    /* frames per second */
-    AVRational tmp1{ 1,25 };
-    AVRational tmp2{ 25,1 };
-    c->time_base = tmp1;
-    c->framerate = tmp2;
-    //c->time_base = (AVRational) { 1, 25 };
-    //c->framerate = (AVRational) { 25, 1 };
+    for (int i = 0; i < 1; i++) {
+        c[i] = avcodec_alloc_context3(codec);
+        if (!c) {
+            fprintf(stderr, "Could not allocate video codec context\n");
+            exit(1);
+        }
+        /* put sample parameters */
+        c[i]->bit_rate = 400000;
+        /* resolution must be a multiple of two */
+        c[i]->width = width;
+        c[i]->height = height;
+        /* frames per second */
+        AVRational tmp1{ 1,25 };
+        AVRational tmp2{ 25,1 };
+        c[i]->time_base = tmp1;
+        c[i]->framerate = tmp2;
+        //c->time_base = (AVRational) { 1, 25 };
+        //c->framerate = (AVRational) { 25, 1 };
 
-    /* emit one intra frame every ten frames
-    * check frame pict_type before passing frame
-    * to encoder, if frame->pict_type is AV_PICTURE_TYPE_I
-    * then gop_size is ignored and the output of encoder
-    * will always be I frame irrespective to gop_size
-    */
-    c->gop_size = 10;
-    c->max_b_frames = 1;
-    c->pix_fmt = AV_PIX_FMT_YUV420P;
+        /* emit one intra frame every ten frames
+        * check frame pict_type before passing frame
+        * to encoder, if frame->pict_type is AV_PICTURE_TYPE_I
+        * then gop_size is ignored and the output of encoder
+        * will always be I frame irrespective to gop_size
+        */
+        c[i]->gop_size = 10;
+        c[i]->max_b_frames = 1;
+        c[i]->pix_fmt = pixel_fmt;
 
-    if (codec->id == AV_CODEC_ID_H264)
-        av_opt_set(c->priv_data, "preset", "slow", 0);
+        if (codec->id == AV_CODEC_ID_H264)
+            av_opt_set(c[i]->priv_data, "preset", "slow", 0);
 
-    /* open it */
-    ret = avcodec_open2(c, codec, NULL);
-    if (ret < 0) {
-        //fprintf(stderr, "Could not open codec: %s\n", av_err2str(ret));
-        exit(1);
+        /* open it */
+        ret = avcodec_open2(c[i], codec, NULL);
+        if (ret < 0) {
+            //fprintf(stderr, "Could not open codec: %s\n", av_err2str(ret));
+            exit(1);
+        }
     }
 
     //Input raw data
@@ -123,21 +149,15 @@ int main(int argc, char **argv)
         fprintf(stderr, "Could not open %s\n", filename_in);
         return -1;
     }
-    //Output bitstream
-    fp_out = fopen(filename_out, "wb");
-    if (!fp_out) {
-        fprintf(stderr, "Could not open %s\n", filename_out);
-        exit(1);
-    }
 
     frame = av_frame_alloc();
     if (!frame) {
         fprintf(stderr, "Could not allocate video frame\n");
         exit(1);
     }
-    frame->format = c->pix_fmt;
-    frame->width = c->width;
-    frame->height = c->height;
+    frame->format = pixel_fmt;
+    frame->width = width;
+    frame->height = height;
 
     ret = av_frame_get_buffer(frame, 32);
     if (ret < 0) {
@@ -158,17 +178,17 @@ int main(int argc, char **argv)
         /* prepare a dummy image */
         /* Y */
         /*for (y = 0; y < c->height; y++) {
-            for (x = 0; x < c->width; x++) {
-                frame->data[0][y * frame->linesize[0] + x] = x + y + i * 3;
-            }
+        for (x = 0; x < c->width; x++) {
+        frame->data[0][y * frame->linesize[0] + x] = x + y + i * 3;
+        }
         }*/
 
         /* Cb and Cr */
         /*for (y = 0; y < c->height / 2; y++) {
-            for (x = 0; x < c->width / 2; x++) {
-                frame->data[1][y * frame->linesize[1] + x] = 128 + y + i * 2;
-                frame->data[2][y * frame->linesize[2] + x] = 64 + x + i * 5;
-            }
+        for (x = 0; x < c->width / 2; x++) {
+        frame->data[1][y * frame->linesize[1] + x] = 128 + y + i * 2;
+        frame->data[2][y * frame->linesize[2] + x] = 64 + x + i * 5;
+        }
         }*/
         //Read raw YUV data
         if (fread(frame->data[0], 1, y_size, fp_in) <= 0 ||		// Y
@@ -182,18 +202,19 @@ int main(int argc, char **argv)
         frame->pts = i;
 
         /* encode the image */
-        encode(c, frame, pkt, fp_out);
+        encoder(c[0], frame, pkt, 0);
     }
 
     /* flush the encoder */
-    encode(c, NULL, pkt, fp_out);
+    encoder(c[0], NULL, pkt, 0);
 
-    /* add sequence end code to have a real MPEG file */
-    fwrite(endcode, 1, sizeof(endcode), fp_out);
-    fclose(fp_out);
+
     fclose(fp_in);
 
-    avcodec_free_context(&c);
+    for (int i = 0; i < 1; i++)
+    {
+        avcodec_free_context(&c[i]);
+    }
     av_frame_free(&frame);
     av_packet_free(&pkt);
 
