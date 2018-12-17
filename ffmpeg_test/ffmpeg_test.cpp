@@ -18,7 +18,7 @@ extern "C"
 #include "taskset.h"
 #include "hbtypes.h"
 
-#define NUM_THREADS 1
+#define NUM_THREADS 4
 
 typedef struct
 {
@@ -161,7 +161,7 @@ int main(int argc, char **argv)
     int width = 1920;
     int height = 1080;
     
-    char filename_in[] = "G:/test.yuv";
+    char filename_in[] = "G:/test3.yuv";
     char filename_out[] = "output.265";
     char codec_name[] = "libx265";
 
@@ -255,7 +255,7 @@ int main(int argc, char **argv)
 
     y_size = frame->width * frame->height;
     /* encode 1 second of video */
-    for (i = 0; i < 25; i++) {
+    for (i = 0; i < 252; i++) {
         fflush(stdout);
 
         /* make sure the frame data is writable */
